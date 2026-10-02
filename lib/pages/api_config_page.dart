@@ -55,7 +55,27 @@ class _OpenAICompatibleConfigPageState
       'name': TextEditingController(text: item.name),
       'baseUrl': TextEditingController(text: item.baseUrl),
       'apiKey': TextEditingController(text: item.apiKey),
+      'headers': TextEditingController(text: _headersToText(item.customHeaders)),
     };
+  }
+
+  /// 自定义请求头 ↔ 文本（每行 `Key: Value`）。
+  static String _headersToText(Map<String, String> headers) =>
+      headers.entries.map((e) => '${e.key}: ${e.value}').join('\n');
+
+  static Map<String, String> _parseHeaders(String text) {
+    final result = <String, String>{};
+    for (final rawLine in text.split('\n')) {
+      final line = rawLine.trim();
+      if (line.isEmpty || line.startsWith('#')) continue;
+      final index = line.indexOf(':');
+      if (index <= 0) continue;
+      final key = line.substring(0, index).trim();
+      final value = line.substring(index + 1).trim();
+      if (key.isEmpty) continue;
+      result[key] = value;
+    }
+    return result;
   }
 
   void _initModelControllers(ApiModel model) {
@@ -97,6 +117,7 @@ class _OpenAICompatibleConfigPageState
       name: nameText.isEmpty ? item.name : nameText,
       baseUrl: controllers['baseUrl']!.text.trim(),
       apiKey: controllers['apiKey']!.text.trim(),
+      customHeaders: _parseHeaders(controllers['headers']!.text),
       models: updatedModels,
     );
   }
@@ -172,6 +193,9 @@ class _OpenAICompatibleConfigPageState
       name: controllers['name']!.text.trim(),
       baseUrl: controllers['baseUrl']!.text.trim(),
       apiKey: controllers['apiKey']!.text.trim(),
+      customHeaders: controllers['headers'] == null
+          ? item.customHeaders
+          : _parseHeaders(controllers['headers']!.text),
       models: updatedModels,
     );
   }
@@ -537,6 +561,13 @@ class _OpenAICompatibleConfigPageState
                         label: 'API Key',
                         hint: 'sk-...',
                         obscureText: true,
+                      ),
+                      const SizedBox(height: 10),
+                      _buildTextField(
+                        controller: controllers['headers']!,
+                        label: '自定义请求头（每行 Key: Value，可留空）',
+                        hint: 'x-opencode-session: pocketinn',
+                        maxLines: 4,
                       ),
                       const SizedBox(height: 12),
                       _buildModelsList(item),

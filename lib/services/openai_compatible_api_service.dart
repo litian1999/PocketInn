@@ -611,6 +611,11 @@ class OpenAICompatibleApiService implements IOpenAiApiService {
       'Accept': 'application/json',
       if (config.apiKey.trim().isNotEmpty)
         'Authorization': 'Bearer ${config.apiKey.trim()}',
+      // ★ 供应商级自定义请求头（后写 → 允许覆盖上面的默认值）。
+      //   用途：需要额外头的服务，例如 OpenCode Go 的 `x-opencode-session`
+      //   （缺它会被拒 400 MissingSessionID）。
+      for (final entry in config.customHeaders.entries)
+        if (entry.key.trim().isNotEmpty) entry.key.trim(): entry.value,
     };
   }
 

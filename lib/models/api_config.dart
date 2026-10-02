@@ -49,6 +49,11 @@ abstract class ApiConfig with _$ApiConfig {
     @JsonKey(defaultValue: <ApiModel>[])
     @Default(<ApiModel>[])
     List<ApiModel> models,
+    /// ★ 供应商级自定义请求头。App 默认只发 `Accept` + `Authorization`，
+    /// 因此需要额外头的服务（如 OpenCode Go 的 `x-opencode-session`）无法使用。
+    @JsonKey(defaultValue: <String, String>{})
+    @Default(<String, String>{})
+    Map<String, String> customHeaders,
   }) = _ApiConfig;
 
   factory ApiConfig.fromJson(Map<String, dynamic> json) =>
@@ -62,6 +67,7 @@ abstract class ApiConfig with _$ApiConfig {
         apiKey: apiKey,
         model: model.modelId,
         customBody: model.customBody,
+        customHeaders: customHeaders,
       );
 
   /// 用于仅需 provider 信息（如 fetchModels）的场景：取首个 model，
@@ -83,6 +89,10 @@ abstract class ResolvedApiConfig with _$ResolvedApiConfig {
     @JsonKey(defaultValue: '') required String apiKey,
     @JsonKey(defaultValue: '') required String model,
     @JsonKey(defaultValue: '') @Default('') String customBody,
+    /// 供应商级自定义请求头，透传到每次请求（可覆盖默认的 Accept/Authorization）。
+    @JsonKey(defaultValue: <String, String>{})
+    @Default(<String, String>{})
+    Map<String, String> customHeaders,
   }) = _ResolvedApiConfig;
 
   factory ResolvedApiConfig.fromJson(Map<String, dynamic> json) =>
