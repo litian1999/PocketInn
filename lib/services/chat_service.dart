@@ -184,6 +184,7 @@ class ChatService {
       );
 
       // 状态提取（二次调用）：失败静默跳过，不影响聊天主流程。
+      // respectInterval：按设置里的「提取间隔」节流（默认 1 ＝ 每条都提）。
       unawaited(
         StatusExtractionService.instance.extractForAssistantMessage(
           sessionId: activeSession.id,
@@ -196,6 +197,7 @@ class ChatService {
           characterName: character.name,
           userName: userSetting.name,
           cardJson: character.cardJson,
+          respectInterval: true,
         ),
       );
 

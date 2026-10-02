@@ -230,6 +230,21 @@ class _StatusExtractionSection extends StatelessWidget {
                 updateStatusExtractionConfig(recentMessages: value.toInt()),
             flat: true,
           ),
+          flatSectionDivider(context),
+          SettingsSliderTile(
+            title: '提取间隔',
+            subtitle: '每 N 条回复提取一次；1 ＝ 每条回复都提取（默认）',
+            value: config.interval.toDouble(),
+            min: kStatusExtractionIntervalMin.toDouble(),
+            max: kStatusExtractionIntervalMax.toDouble(),
+            divisions:
+                kStatusExtractionIntervalMax - kStatusExtractionIntervalMin,
+            displayValue: (v) =>
+                v.toInt() == 1 ? '每条回复' : '每 ${v.toInt()} 条回复',
+            onChanged: (value) =>
+                updateStatusExtractionConfig(interval: value.toInt()),
+            flat: true,
+          ),
           if (apiConfigs.any((c) => c.models.isNotEmpty)) ...[
             flatSectionDivider(context),
             ModelPickerTile(

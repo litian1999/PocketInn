@@ -128,6 +128,41 @@ void main() {
       expect(prompt, startsWith('只输出 JSON。当前 {'));
       expect(prompt, contains('好感度：帮她做事 +5，被冷落 -3'));
     });
+
+    test('内置默认把状态 JSON 放在最后（前缀缓存友好）', () {
+      final prompt = buildStatusExtractionPrompt(state: stateWithHint());
+      final stateIndex = prompt.indexOf('"好感度": "10"');
+
+      expect(stateIndex, greaterThan(0), reason: '状态 JSON 应被注入');
+      // 约束与变化说明都必须排在状态之前，否则每轮都会变的状态会作废它们
+      expect(prompt.indexOf('数值范围'), lessThan(stateIndex));
+      expect(prompt.indexOf('变量变化说明'), lessThan(stateIndex));
+      expect(prompt.indexOf('当前状态变量（JSON）：'), lessThan(stateIndex));
+      // 状态之后不再有别的段落
+      expect(prompt.substring(stateIndex), isNot(contains('数值范围')));
+      expect(prompt.substring(stateIndex), isNot(contains('变量变化说明')));
+    });
+  });
+
+  group('StatusExtractionConfig', () {
+    test('默认间隔为 1（与加入「提取间隔」之前的行为一致）', () {
+      const config = StatusExtractionConfig();
+      expect(config.interval, 1);
+      expect(config.copyWith(interval: 5).interval, 5);
+    });
+
+    test('copyWith 不改动未传入的字段', () {
+      const config = StatusExtractionConfig(
+        enabled: true,
+        recentMessages: 8,
+        interval: 3,
+      );
+      final next = config.copyWith(interval: 2);
+
+      expect(next.enabled, isTrue);
+      expect(next.recentMessages, 8);
+      expect(next.interval, 2);
+    });
   });
 
   group('applyCardChangeHints', () {

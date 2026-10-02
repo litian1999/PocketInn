@@ -20,6 +20,7 @@ class StatusExtractionConfig {
     this.enabled = false,
     this.extractionModelId,
     this.recentMessages = 6,
+    this.interval = 1,
     this.customPrompt = '',
   });
 
@@ -32,6 +33,12 @@ class StatusExtractionConfig {
   /// 参与提取的最近消息条数（不含最新回复本身）。
   final int recentMessages;
 
+  /// 自动提取的间隔（按助手消息条数计）。
+  ///
+  /// `1`（默认）＝每条回复都提取，与加入本设置之前的行为一致。
+  /// 仅作用于**发送**路径；重新生成/编辑是用户显式操作，仍然即时提取。
+  final int interval;
+
   /// 自定义提取提示词（空串使用内置默认）。
   final String customPrompt;
 
@@ -39,6 +46,7 @@ class StatusExtractionConfig {
     bool? enabled,
     Object? extractionModelId = _unset,
     int? recentMessages,
+    int? interval,
     String? customPrompt,
   }) {
     return StatusExtractionConfig(
@@ -47,6 +55,7 @@ class StatusExtractionConfig {
           ? this.extractionModelId
           : extractionModelId as String?,
       recentMessages: recentMessages ?? this.recentMessages,
+      interval: interval ?? this.interval,
       customPrompt: customPrompt ?? this.customPrompt,
     );
   }
@@ -58,11 +67,18 @@ const Object _unset = Object();
 const int kStatusExtractionRecentMessagesMin = 2;
 const int kStatusExtractionRecentMessagesMax = 20;
 
+/// 自动提取间隔（按助手消息条数）取值范围。
+const int kStatusExtractionIntervalMin = 1;
+const int kStatusExtractionIntervalMax = 20;
+
 /// 内置默认提取提示词。{{state}} 由调用方替换为当前变量 JSON。
+///
+/// ★ `{{state}}` 放在**最后**：状态每轮都会变，而前缀缓存只认"从头开始逐字节
+/// 相同"的部分——把它压到末尾，前面的输出规则与变量约束/变化说明才能被命中。
+/// 约束段落由 [buildStatusExtractionPrompt] 插到 `{{state}}` 之前。
 const String kDefaultStatusExtractionPrompt =
     '你是一个视觉小说游戏的状态跟踪器。请根据最新剧情进展，'
-    '对下面的状态变量计算变化。\n\n'
-    '当前状态变量（JSON）：\n{{state}}\n\n'
+    '计算下列状态变量的变化。\n\n'
     '输出规则：\n'
     '- 只输出严格的 JSON，格式：{"ops": [{"op": "set", "var": "变量名", '
     '"value": 新值, "reason": "一句话原因"}]}；\n'
@@ -71,7 +87,8 @@ const String kDefaultStatusExtractionPrompt =
     '- 变量若带有「变化说明」，按说明判断触发条件、方向与幅度；\n'
     '- 只根据剧情中实际发生的变化输出操作，没有变化输出 {"ops": []}；\n'
     '- 不要发明当前状态之外的变量，除非剧情确实引入了新的持久状态；\n'
-    '- 不要输出 JSON 以外的任何内容。';
+    '- 不要输出 JSON 以外的任何内容。\n\n'
+    '当前状态变量（JSON）：\n{{state}}';
 
 ValueNotifier<StatusExtractionConfig> statusExtractionNotifier = ValueNotifier(
   const StatusExtractionConfig(),
@@ -81,6 +98,7 @@ void updateStatusExtractionConfig({
   bool? enabled,
   Object? extractionModelId = _unset,
   int? recentMessages,
+  int? interval,
   String? customPrompt,
 }) {
   final current = statusExtractionNotifier.value;
@@ -92,6 +110,12 @@ void updateStatusExtractionConfig({
         : recentMessages.clamp(
             kStatusExtractionRecentMessagesMin,
             kStatusExtractionRecentMessagesMax,
+          ),
+    interval: interval == null
+        ? current.interval
+        : interval.clamp(
+            kStatusExtractionIntervalMin,
+            kStatusExtractionIntervalMax,
           ),
     customPrompt: customPrompt ?? current.customPrompt,
   );
@@ -106,11 +130,16 @@ Future<void> initializeStatusExtractionConfig() async {
     'status_extraction_model_id',
   );
   final recentMessages = storage.getInt('status_extraction_recent_messages');
+  final interval = storage.getInt('status_extraction_interval');
   final customPrompt = storage.getString('status_extraction_custom_prompt');
   statusExtractionNotifier.value = StatusExtractionConfig(
     enabled: enabled ?? false,
     extractionModelId: extractionModelId,
     recentMessages: recentMessages ?? 6,
+    interval: (interval ?? 1).clamp(
+      kStatusExtractionIntervalMin,
+      kStatusExtractionIntervalMax,
+    ),
     customPrompt: customPrompt ?? '',
   );
 }
@@ -131,6 +160,9 @@ void _persistStatusExtractionConfig(StatusExtractionConfig config) {
   }
   unawaited(
     storage.setInt('status_extraction_recent_messages', config.recentMessages),
+  );
+  unawaited(
+    storage.setInt('status_extraction_interval', config.interval),
   );
   if (config.customPrompt.trim().isNotEmpty) {
     unawaited(
@@ -188,6 +220,8 @@ class StatusExtractionService {
   /// 消息上如已有旧差量（原地编辑后重提）会先清空；提取失败则保持清空。
   /// 任务执行前与写库前会校验消息文本仍与 [assistantText] 一致，不一致
   /// （消息已被编辑/替换）时丢弃，防止过期差量落库。
+  /// [respectInterval] 为 true 时按 `StatusExtractionConfig.interval` 节流
+  /// （仅发送路径需要；重新生成/编辑不传，保持即时提取）。
   Future<void> extractForAssistantMessage({
     required String sessionId,
     required String assistantMessageId,
@@ -196,6 +230,7 @@ class StatusExtractionService {
     String characterName = '角色',
     String userName = '用户',
     Map<String, dynamic>? cardJson,
+    bool respectInterval = false,
   }) async {
     PostTaskScheduler.instance.schedule(
       kind: PostTaskKind.statusExtraction,
@@ -213,6 +248,16 @@ class StatusExtractionService {
           return;
         }
         if (assistantText.trim().isEmpty) {
+          return;
+        }
+
+        // ★ 提取间隔（仅发送路径开启）：距最近一次"已处理"不足 interval 条就跳过。
+        if (respectInterval &&
+            !await _intervalReached(
+              assistantMessageId: assistantMessageId,
+              recentMessages: recentMessages,
+              interval: config.interval,
+            )) {
           return;
         }
 
@@ -292,6 +337,38 @@ class StatusExtractionService {
     );
   }
 
+  /// 按「提取间隔」判断这条助手消息是否该提取。
+  ///
+  /// 计数口径与记忆提取一致——以"已处理"为起点，数它之后新增的助手消息条数。
+  /// 状态提取的"已处理"标记就是该条消息上挂着变量差量（`chat_variable_diffs`）。
+  /// 注意：一次提取若没产出任何 op，`writeDiff` 会把差量删掉、不留标记，
+  /// 于是下一次仍会提取——相当于重试，不会漏掉真实变化。
+  Future<bool> _intervalReached({
+    required String assistantMessageId,
+    required List<ChatMessage> recentMessages,
+    required int interval,
+  }) async {
+    if (interval <= 1) {
+      return true;
+    }
+    final assistantIds = <String>[
+      for (final message in recentMessages)
+        if (!message.isMe && message.id != null) message.id!,
+      assistantMessageId,
+    ];
+    final diffs = await ChatDatabaseService.instance.loadVariableDiffBatch(
+      assistantIds,
+    );
+    var pending = 0;
+    for (final id in assistantIds.reversed) {
+      if (diffs.containsKey(id)) {
+        break;
+      }
+      pending++;
+    }
+    return pending >= interval;
+  }
+
   String _buildDialogueContext({
     required List<ChatMessage> recentMessages,
     required String assistantText,
@@ -311,14 +388,16 @@ class StatusExtractionService {
 
 /// 拼装状态提取调用的 system 提示词。
 ///
-/// [customPrompt] 为空时使用 [kDefaultStatusExtractionPrompt]；
-/// `{{state}}` 被替换为当前变量 JSON（`{名称: 值}`），随后追加变量约束
-/// （数值范围、枚举白名单）与角色卡声明的「变化说明」段落。
+/// [customPrompt] 为空时使用 [kDefaultStatusExtractionPrompt]：变量约束
+/// （数值范围、枚举白名单）与角色卡声明的「变化说明」会插到 `{{state}}`
+/// **之前**，让每轮都会变的状态 JSON 落在最后（前缀缓存友好）。
+/// 传了自定义提示词时保持既有排布：`{{state}}` 原地替换、约束段落追加在最后。
 String buildStatusExtractionPrompt({
   required VariableState state,
   String customPrompt = '',
 }) {
-  final rawPrompt = customPrompt.trim().isNotEmpty
+  final trimmed = customPrompt.trim();
+  final rawPrompt = trimmed.isNotEmpty
       ? customPrompt
       : kDefaultStatusExtractionPrompt;
 
@@ -331,13 +410,39 @@ String buildStatusExtractionPrompt({
   }
   final stateJson = '{${buffer.toString()}}';
 
-  var prompt = rawPrompt.replaceAll('{{state}}', stateJson);
-  for (final section in [_constraintHints(state), _changeHints(state)]) {
-    if (section.isNotEmpty) {
+  final sections = [
+    for (final section in [_constraintHints(state), _changeHints(state)])
+      if (section.isNotEmpty) section,
+  ];
+
+  // 自定义提示词：保持既有行为——{{state}} 原地替换，约束段落追加在最后。
+  if (trimmed.isNotEmpty) {
+    var prompt = rawPrompt.replaceAll('{{state}}', stateJson);
+    for (final section in sections) {
       prompt = '$prompt\n$section';
     }
+    return prompt;
   }
-  return prompt;
+
+  // ★ 内置默认：把约束/变化说明插到 {{state}} **之前**，让每轮都会变的
+  //   状态 JSON 落在最后。前缀缓存只认"从头开始逐字节相同"的部分——
+  //   状态放末尾时，前面的输出规则与约束段落才能被缓存命中。
+  const marker = '{{state}}';
+  final placeholder = rawPrompt.indexOf(marker);
+  if (placeholder < 0) {
+    return [
+      rawPrompt.trimRight(),
+      ...sections,
+      '当前状态变量（JSON）：\n$stateJson',
+    ].join('\n\n');
+  }
+  final head = rawPrompt.substring(0, placeholder).trimRight();
+  final tail = rawPrompt.substring(placeholder + marker.length);
+  return [
+    head,
+    ...sections,
+    '$stateJson$tail',
+  ].where((part) => part.isNotEmpty).join('\n\n');
 }
 
 /// 生成变量约束提示段落：数值范围与枚举白名单；无约束时为空串。
