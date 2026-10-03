@@ -119,14 +119,36 @@ void main() {
       expect(prompt, isNot(contains('变量变化说明')));
     });
 
-    test('自定义提示词替换 {{state}} 后同样追加说明', () {
+    test('自定义提示词同样把约束排到 {{state}} 之前（前缀缓存友好）', () {
       final prompt = buildStatusExtractionPrompt(
         state: stateWithHint(),
         customPrompt: '只输出 JSON。当前 {{state}}',
       );
 
-      expect(prompt, startsWith('只输出 JSON。当前 {'));
+      // ★ 这条断言曾经反过来（要求状态 JSON 紧跟自定义词），
+      //   等于把"自定义词拿不到前缀缓存"这个缺陷固化成了规范。
+      //   实测（真实 DeepSeek·自定义词 597 字+约束段）：被挡住时命中 0%，
+      //   走同一段排布算法后命中 68%。内容一字不差，只是顺序不同。
+      final stateIndex = prompt.indexOf('"好感度": "10"');
+      expect(stateIndex, greaterThan(0), reason: '状态 JSON 应被注入');
+      expect(prompt.indexOf('只输出 JSON。'), lessThan(stateIndex));
+      expect(prompt.indexOf('好感度：帮她做事 +5，被冷落 -3'), lessThan(stateIndex),
+          reason: '约束段必须排在每轮都会变的状态之前');
+      // 状态之后不再有固定段落
+      expect(prompt.substring(stateIndex), isNot(contains('好感度：帮她做事 +5，被冷落 -3')));
+    });
+
+    test('自定义提示词里没有 {{state}} 时兜底追加', () {
+      final prompt = buildStatusExtractionPrompt(
+        state: stateWithHint(),
+        customPrompt: '只输出 JSON。',
+      );
+
+      expect(prompt, startsWith('只输出 JSON。'));
       expect(prompt, contains('好感度：帮她做事 +5，被冷落 -3'));
+      // 没有标记 → 状态只能落在最后
+      expect(prompt.indexOf('"好感度": "10"'),
+          greaterThan(prompt.indexOf('好感度：帮她做事 +5，被冷落 -3')));
     });
 
     test('内置默认把状态 JSON 放在最后（前缀缓存友好）', () {

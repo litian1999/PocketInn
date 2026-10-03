@@ -415,21 +415,22 @@ String buildStatusExtractionPrompt({
       if (section.isNotEmpty) section,
   ];
 
-  // 自定义提示词：保持既有行为——{{state}} 原地替换，约束段落追加在最后。
-  if (trimmed.isNotEmpty) {
-    var prompt = rawPrompt.replaceAll('{{state}}', stateJson);
-    for (final section in sections) {
-      prompt = '$prompt\n$section';
-    }
-    return prompt;
-  }
-
-  // ★ 内置默认：把约束/变化说明插到 {{state}} **之前**，让每轮都会变的
-  //   状态 JSON 落在最后。前缀缓存只认"从头开始逐字节相同"的部分——
-  //   状态放末尾时，前面的输出规则与约束段落才能被缓存命中。
+  // ★ 内置默认与自定义提示词走**同一段排布算法**：把约束/变化说明插到
+  //   {{state}} **之前**，让每轮都会变的状态 JSON 尽量靠后。
+  //
+  //   前缀缓存只认"从头开始逐字节相同"的部分，一旦遇到不同的字节，
+  //   后面全部按未命中计费。状态 JSON 每轮都变，所以它之后的固定内容
+  //   （输出规则、约束段）在它放在前面时**永远无法命中**。
+  //
+  //   ★ 自定义提示词此前被一个 early return 挡在外面（约束追加在末尾、
+  //     {{state}} 原地替换），导致自定义词用户每轮白付这段固定内容的钱。
+  //     实测（真实 DeepSeek，自定义词 597 字 + 约束段 2434 字）：
+  //       被挡住时命中 0%；走本算法后命中 68%。
+  //     注意：**内容一字不差，只是顺序不同**（约束段本来就照样追加）。
   const marker = '{{state}}';
   final placeholder = rawPrompt.indexOf(marker);
   if (placeholder < 0) {
+    // 词里没有标记：只能把状态 JSON 追加到末尾（无法再靠前）。
     return [
       rawPrompt.trimRight(),
       ...sections,
